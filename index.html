@@ -164,6 +164,7 @@
 
   #totalGameTimeRow { display: none; justify-content: center; align-items: baseline; gap: 6px; font-size: 11px; color: rgba(255,255,255,0.45); text-transform: uppercase; letter-spacing: 1.5px; margin-top: -2px; }
   #totalGameTimeRow span.val { font-size: 13px; color: rgba(167,139,250,0.95); font-weight: 700; letter-spacing: 0.5px; font-variant-numeric: tabular-nums; text-transform: none; }
+  #totalGameTimeRow button { display: none; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: rgba(255,255,255,0.5); width: 20px; height: 20px; font-size: 12px; line-height: 1; cursor: pointer; margin-left: 2px; align-items: center; justify-content: center; padding: 0; }
 
   .player-list-header { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; gap: 6px; }
   .header-btn-row { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
@@ -403,6 +404,12 @@
       </div>
       <label class="toggle-switch"><input type="checkbox" id="settingManualStart"><span class="track"></span></label>
     </div>
+    <div class="settings-row" id="manualStartRoundsRow" style="display:none; padding-left: 14px;">
+      <div class="settings-row-label">Auch im Rundentimer-Modus
+        <div class="settings-row-sub">Sonst gilt der manuelle Start nur im Zeitbank-Modus</div>
+      </div>
+      <label class="toggle-switch"><input type="checkbox" id="settingManualStartRoundsToo"><span class="track"></span></label>
+    </div>
 
     <div class="settings-divider"></div>
     <div class="settings-section-label">Pause</div>
@@ -498,7 +505,7 @@
     </div>
   </div>
 
-  <div id="totalGameTimeRow"><span>Gesamtspielzeit:</span><span class="val" id="totalGameTimeVal">00:00</span></div>
+  <div id="totalGameTimeRow"><span>Gesamtspielzeit:</span><span class="val" id="totalGameTimeVal">00:00</span><button id="btnResetGameTime" type="button" title="Gesamtspielzeit zuruecksetzen">&#8635;</button></div>
 
   <div class="player-list-header">
     <div style="font-size:11px; opacity:0.5; text-transform:uppercase; letter-spacing:2px;">Spieler</div>
@@ -599,6 +606,7 @@ const app = {
 
   // --- Pro: Einstellungen ---
   manualStart: false,
+  manualStartRoundsToo: false, // manueller Start standardmaessig nur im Zeitbank-Modus, hier optional auch im Rundentimer
   pausePermission: 'host',  // 'host' | 'all'
   autoPauseEveryN: 0,
   autoPauseRepeat: false,
@@ -693,6 +701,7 @@ const el = {
   soundAutoPause: document.getElementById('soundAutoPause'),
 
   totalGameTimeRow: document.getElementById('totalGameTimeRow'),
+  btnResetGameTime: document.getElementById('btnResetGameTime'),
   totalGameTimeVal: document.getElementById('totalGameTimeVal'),
   btnImportState: document.getElementById('btnImportState'),
   btnExportState: document.getElementById('btnExportState'),
@@ -708,6 +717,8 @@ const el = {
   gameSettingsModal: document.getElementById('gameSettingsModal'),
   btnCloseSettingsModal: document.getElementById('btnCloseSettingsModal'),
   settingManualStart: document.getElementById('settingManualStart'),
+  manualStartRoundsRow: document.getElementById('manualStartRoundsRow'),
+  settingManualStartRoundsToo: document.getElementById('settingManualStartRoundsToo'),
   settingPausePermission: document.getElementById('settingPausePermission'),
   settingAutoPauseEvery: document.getElementById('settingAutoPauseEvery'),
   settingAutoPauseRepeat: document.getElementById('settingAutoPauseRepeat'),
@@ -967,7 +978,7 @@ function publishState() {
     gameStarted: app.gameStarted, hostTime: Date.now(), soundSettings: app.soundSettings,
 
     timeMode: app.timeMode, bankBaseMinutes: app.bankBaseMinutes, turnPendingStart: app.turnPendingStart,
-    manualStart: app.manualStart, pausePermission: app.pausePermission,
+    manualStart: app.manualStart, manualStartRoundsToo: app.manualStartRoundsToo, pausePermission: app.pausePermission,
     autoPauseEveryN: app.autoPauseEveryN, autoPauseRepeat: app.autoPauseRepeat, countPauseInTotal: app.countPauseInTotal,
 
     paused: app.paused, pausedByPeerId: app.pausedByPeerId, pausedByName: app.pausedByName,
@@ -1031,6 +1042,7 @@ function handleStateMessage(snapshot) {
   app.bankBaseMinutes = snapshot.bankBaseMinutes || 10;
   app.turnPendingStart = !!snapshot.turnPendingStart;
   app.manualStart = !!snapshot.manualStart;
+  app.manualStartRoundsToo = !!snapshot.manualStartRoundsToo;
   app.pausePermission = snapshot.pausePermission || 'host';
   app.autoPauseEveryN = snapshot.autoPauseEveryN || 0;
   app.autoPauseRepeat = !!snapshot.autoPauseRepeat;
@@ -1074,8 +1086,10 @@ function handleStateMessage(snapshot) {
 
 function isPlayerEligible(p) {
   if (!p) return false;
-  if (p.skip) return false;
-  if (app.timeMode === 'bank' && (p.timeBankSeconds || 0) <= 0) return false;
+  if (app.timeMode === 'bank') {
+    if (p.skip) return false;
+    if ((p.timeBankSeconds || 0) <= 0) return false;
+  }
   return true;
 }
 
@@ -1095,6 +1109,12 @@ function shouldAutoPauseNow() {
   return app.roundCount === app.autoPauseEveryN;
 }
 
+function isManualStartActiveNow() {
+  if (!app.manualStart) return false;
+  if (app.timeMode === 'bank') return true;
+  return app.manualStartRoundsToo;
+}
+
 function startCurrentTurnInternal() {
   const cur = app.players[app.currentIndex];
   const totalMs = (app.timeMode === 'bank' ? ((cur ? cur.timeBankSeconds : 0) || 0) : app.duration) * 1000;
@@ -1112,7 +1132,7 @@ function startCurrentTurn() {
 function beginTurnFor(idx) {
   app.currentIndex = idx;
   resetTurnAlerts();
-  if (app.manualStart) {
+  if (isManualStartActiveNow()) {
     app.turnPendingStart = true;
     app.endTimestamp = null;
     app.isRunning = false; app.isFinished = false;
@@ -1253,6 +1273,7 @@ function createRoom() {
   const hostId = `${TOPIC_PREFIX}-${app.roomCode}`;
   app.myPeerId = `host-${generateClientId()}`;
   app.players = [{ peerId: app.myPeerId, name: app.myName, audioEnabled: true, timeBankSeconds: app.bankBaseMinutes * 60, timeBankManual: false, skip: false }];
+  app.gameTimeStartTs = Date.now(); app.gameTimeAccumPausedMs = 0;
   
   el.qrcodeWrapper.style.display = 'none';
   el.addLocalPlayerBox.style.display = 'none';
@@ -1311,7 +1332,7 @@ function joinRoom(code) {
 function hostStartGame() {
   if (app.players.length < 1) return; ensureAudio(); requestWakeLock();
   app.gameStarted = true;
-  app.roundCount = 0; app.gameTimeStartTs = Date.now(); app.gameTimeAccumPausedMs = 0;
+  app.roundCount = 0;
   app.paused = false; app.pauseReason = null; app.pausedByPeerId = null; app.pausedByName = null;
   app.pauseEmptyPlayerId = null; app.pauseRemainingMs = null; app.pauseStartTs = null; app.pauseSnapshot = null;
   lastPlayedIndex = -1;
@@ -1332,7 +1353,7 @@ function hostResetGame() {
   app.turnPendingStart = false;
   app.paused = false; app.pauseReason = null; app.pausedByPeerId = null; app.pausedByName = null;
   app.pauseEmptyPlayerId = null; app.pauseRemainingMs = null; app.pauseStartTs = null; app.pauseSnapshot = null;
-  app.roundCount = 0; app.gameTimeStartTs = null; app.gameTimeAccumPausedMs = 0;
+  app.roundCount = 0;
   resetTurnAlerts(); lastPlayedIndex = null; pauseOverlayMinimized = false;
   publishState(); setScreen('lobby'); renderLobby(); renderPauseOverlay();
 }
@@ -1391,7 +1412,7 @@ function leaveRoom() {
     isHost: false, myPeerId: null, roomCode: null, players: [], currentIndex: 0, endTimestamp: null,
     isRunning: false, isFinished: false, gameStarted: false,
     timeMode: 'rounds', bankBaseMinutes: 10, turnPendingStart: false,
-    manualStart: false, pausePermission: 'host', autoPauseEveryN: 0, autoPauseRepeat: false, countPauseInTotal: false,
+    manualStart: false, manualStartRoundsToo: false, pausePermission: 'host', autoPauseEveryN: 0, autoPauseRepeat: false, countPauseInTotal: false,
     paused: false, pausedByPeerId: null, pausedByName: null, pauseReason: null, pauseEmptyPlayerId: null, pauseRemainingMs: null,
     roundCount: 0, gameTimeStartTs: null, gameTimeAccumPausedMs: 0, pauseStartTs: null, pendingImportUnresolved: false
   });
@@ -1440,7 +1461,7 @@ function tick() {
           else if (app.soundSettings.thirtySec === 'tone') playTones([784], 0.22);
       }
     }
-    if (totalMs > 10000 && remaining > 0) {
+    if (remaining > 0) {
       const secondsLeft = Math.ceil(remaining / 1000);
       if (secondsLeft <= 10 && secondsLeft !== lastCountdownSecond) {
         lastCountdownSecond = secondsLeft; 
@@ -1498,6 +1519,7 @@ function updateTotalGameTimeDisplay() {
   if (!app.roomCode || !app.gameTimeStartTs) { el.totalGameTimeRow.style.display = 'none'; return; }
   if (!document.getElementById('screen-lobby').classList.contains('active')) return;
   el.totalGameTimeRow.style.display = 'flex';
+  el.btnResetGameTime.style.display = app.isHost ? 'inline-flex' : 'none';
   const hostNow = app.isHost ? Date.now() : (Date.now() + timeOffset);
   let elapsedMs = hostNow - app.gameTimeStartTs;
   if (!app.countPauseInTotal) {
@@ -1513,6 +1535,14 @@ function updateTotalGameTimeDisplay() {
   el.totalGameTimeVal.textContent = (hh > 0 ? String(hh).padStart(2,'0') + ':' : '') + String(mm).padStart(2,'0') + ':' + String(ss).padStart(2,'0');
 }
 
+function resetGameTime() {
+  if (!app.isHost) return;
+  if (!confirm('Gesamtspielzeit wirklich auf 00:00 zuruecksetzen?')) return;
+  app.gameTimeStartTs = Date.now();
+  app.gameTimeAccumPausedMs = 0;
+  publishState(); updateTotalGameTimeDisplay();
+}
+
 function refreshUI() {
   if (document.getElementById('screen-lobby').classList.contains('active')) renderLobby();
   else if (document.getElementById('screen-game').classList.contains('active')) renderGame();
@@ -1526,7 +1556,7 @@ function renderModeToggleUI() {
 
   if (app.timeMode === 'bank') {
     el.durationSliderLabel.textContent = 'Basis-Zeitkonto';
-    el.lobbyDurationSlider.min = '1'; el.lobbyDurationSlider.max = '60'; el.lobbyDurationSlider.step = '5';
+    el.lobbyDurationSlider.min = '5'; el.lobbyDurationSlider.max = '60'; el.lobbyDurationSlider.step = '5';
     el.lobbyDurationSlider.value = app.bankBaseMinutes;
     el.lobbySliderValue.textContent = formatMinutesLabel(app.bankBaseMinutes);
   } else {
@@ -1709,7 +1739,7 @@ function doExport(scope) {
     if (scope === 'all') {
         data.settings = {
             timeMode: app.timeMode, bankBaseMinutes: app.bankBaseMinutes, duration: app.duration,
-            manualStart: app.manualStart, pausePermission: app.pausePermission,
+            manualStart: app.manualStart, manualStartRoundsToo: app.manualStartRoundsToo, pausePermission: app.pausePermission,
             autoPauseEveryN: app.autoPauseEveryN, autoPauseRepeat: app.autoPauseRepeat,
             countPauseInTotal: app.countPauseInTotal, soundSettings: app.soundSettings
         };
@@ -1742,6 +1772,7 @@ function applyImportData(parsed) {
         if (typeof s.bankBaseMinutes === 'number') app.bankBaseMinutes = s.bankBaseMinutes;
         if (typeof s.duration === 'number') app.duration = s.duration;
         if (typeof s.manualStart === 'boolean') app.manualStart = s.manualStart;
+        if (typeof s.manualStartRoundsToo === 'boolean') app.manualStartRoundsToo = s.manualStartRoundsToo;
         if (s.pausePermission) app.pausePermission = s.pausePermission;
         if (typeof s.autoPauseEveryN === 'number') app.autoPauseEveryN = s.autoPauseEveryN;
         if (typeof s.autoPauseRepeat === 'boolean') app.autoPauseRepeat = s.autoPauseRepeat;
@@ -1919,6 +1950,7 @@ attachClick(el.btnStartGame, () => {
 });
 
 attachClick(el.btnLeaveLobbyTop, () => promptLeaveRoom());
+attachClick(el.btnResetGameTime, () => resetGameTime());
 
 attachClick(el.btnNext, () => {
   if (!app.gameStarted || app.paused) return;
@@ -1970,14 +2002,20 @@ attachClick(el.btnPauseLeave, () => promptLeaveRoom());
 attachClick(el.btnOpenGameSettings, () => {
     if (!app.isHost) return;
     el.settingManualStart.checked = app.manualStart;
+    el.settingManualStartRoundsToo.checked = app.manualStartRoundsToo;
+    el.manualStartRoundsRow.style.display = app.manualStart ? 'flex' : 'none';
     el.settingPausePermission.value = app.pausePermission;
     el.settingAutoPauseEvery.value = app.autoPauseEveryN;
     el.settingAutoPauseRepeat.checked = app.autoPauseRepeat;
     el.settingCountPause.checked = app.countPauseInTotal;
     el.gameSettingsModal.classList.add('active');
 });
+el.settingManualStart.addEventListener('change', () => {
+    el.manualStartRoundsRow.style.display = el.settingManualStart.checked ? 'flex' : 'none';
+});
 attachClick(el.btnCloseSettingsModal, () => {
     app.manualStart = el.settingManualStart.checked;
+    app.manualStartRoundsToo = el.settingManualStartRoundsToo.checked;
     app.pausePermission = el.settingPausePermission.value;
     let n = parseInt(el.settingAutoPauseEvery.value, 10);
     if (isNaN(n) || n < 0) n = 0; if (n > 50) n = 50;
